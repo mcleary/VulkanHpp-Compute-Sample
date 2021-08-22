@@ -1,7 +1,15 @@
 #include <iostream>
 #include <fstream>
 
+// Comment this to disable VMA support
+#define WITH_VMA
+
 #include <vulkan/vulkan.hpp>
+
+#ifdef WITH_VMA
+#define VMA_IMPLEMENTATION
+#include "vk_mem_alloc.h"
+#endif
 
 int main()
 {
@@ -27,7 +35,7 @@ int main()
 		vk::PhysicalDeviceProperties DeviceProps = PhysicalDevice.getProperties();
 		std::cout << "Device Name    : " << DeviceProps.deviceName << std::endl;
 		const uint32_t ApiVersion = DeviceProps.apiVersion;
-		std::cout << "Vulkan Version : " << VK_VERSION_MAJOR(ApiVersion) << "." << VK_VERSION_MINOR(ApiVersion) << "." << VK_VERSION_PATCH(ApiVersion);
+		std::cout << "Vulkan Version : " << VK_VERSION_MAJOR(ApiVersion) << "." << VK_VERSION_MINOR(ApiVersion) << "." << VK_VERSION_PATCH(ApiVersion) << std::endl;
 		vk::PhysicalDeviceLimits DeviceLimits = DeviceProps.limits;
 		std::cout << "Max Compute Shared Memory Size: " << DeviceLimits.maxComputeSharedMemorySize / 1024 << " KB" << std::endl;
 
@@ -39,9 +47,12 @@ int main()
 		const uint32_t ComputeQueueFamilyIndex = std::distance(QueueFamilyProps.begin(), PropIt);
 		std::cout << "Compute Queue Family Index: " << ComputeQueueFamilyIndex << std::endl;
 
+		// Just to avoid a warning from the Vulkan Validation Layer
+		const float QueuePriority = 1.0f;
 		vk::DeviceQueueCreateInfo DeviceQueueCreateInfo(vk::DeviceQueueCreateFlags(),	// Flags
 														ComputeQueueFamilyIndex,		// Queue Family Index
-														1);								// Number of Queues
+														1,								// Number of Queues
+														&QueuePriority);
 		vk::DeviceCreateInfo DeviceCreateInfo(vk::DeviceCreateFlags(), // Flags
 											  DeviceQueueCreateInfo);  // Device Queue Create Info struct
 		vk::Device Device = PhysicalDevice.createDevice(DeviceCreateInfo);
@@ -57,6 +68,51 @@ int main()
 			1,											// Number of queue family indices
 			&ComputeQueueFamilyIndex					// List of queue family indices
 		};
+
+#ifdef WITH_VMA
+		VmaAllocatorCreateInfo AllocatorInfo = {};
+		AllocatorInfo.vulkanApiVersion = DeviceProps.apiVersion;
+		AllocatorInfo.physicalDevice = PhysicalDevice;
+		AllocatorInfo.device = Device;
+		AllocatorInfo.instance = Instance;
+
+		VmaAllocator Allocator;
+		vmaCreateAllocator(&AllocatorInfo, &Allocator);
+
+		VkBuffer InBufferRaw;
+		VkBuffer OutBufferRaw;
+
+		VmaAllocationCreateInfo AllocationInfo = {};
+		AllocationInfo.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
+
+		VmaAllocation InBufferAllocation;
+		vmaCreateBuffer(Allocator,
+						&static_cast<VkBufferCreateInfo>(BufferCreateInfo),
+						&AllocationInfo,
+						&InBufferRaw,
+						&InBufferAllocation,
+						nullptr);
+
+		AllocationInfo.usage = VMA_MEMORY_USAGE_GPU_TO_CPU;
+		VmaAllocation OutBufferAllocation;
+		vmaCreateBuffer(Allocator,
+						&static_cast<VkBufferCreateInfo>(BufferCreateInfo),
+						&AllocationInfo,
+						&OutBufferRaw,
+						&OutBufferAllocation,
+						nullptr);
+
+		vk::Buffer InBuffer = InBufferRaw;
+		vk::Buffer OutBuffer = OutBufferRaw;
+
+		int32_t* InBufferPtr = nullptr;
+		vmaMapMemory(Allocator, InBufferAllocation, reinterpret_cast<void**>(&InBufferPtr));
+		for (int32_t I = 0; I < NumElements; ++I)
+		{
+			InBufferPtr[I] = I;
+		}
+		vmaUnmapMemory(Allocator, InBufferAllocation);
+#else
 		vk::Buffer InBuffer = Device.createBuffer(BufferCreateInfo);
 		vk::Buffer OutBuffer = Device.createBuffer(BufferCreateInfo);
 
@@ -96,6 +152,7 @@ int main()
 
 		Device.bindBufferMemory(InBuffer, InBufferMemory, 0);
 		Device.bindBufferMemory(OutBuffer, OutBufferMemory, 0);
+#endif
 
 		std::vector<char> ShaderContents;
 		if (std::ifstream ShaderFile{ "Square.spv", std::ios::binary | std::ios::ate })
@@ -181,6 +238,24 @@ int main()
 							 true,				// Wait All
 							 uint64_t(-1));		// Timeout
 
+#ifdef WITH_VMA
+		vmaMapMemory(Allocator, InBufferAllocation, reinterpret_cast<void**>(&InBufferPtr));
+		for (uint32_t I = 0; I < NumElements; ++I)
+		{
+			std::cout << InBufferPtr[I] << " ";
+		}
+		std::cout << std::endl;
+		vmaUnmapMemory(Allocator, InBufferAllocation);
+
+		int32_t* OutBufferPtr = nullptr;
+		vmaMapMemory(Allocator, OutBufferAllocation, reinterpret_cast<void**>(&OutBufferPtr));
+		for (uint32_t I = 0; I < NumElements; ++I)
+		{
+			std::cout << OutBufferPtr[I] << " ";
+		}
+		std::cout << std::endl;
+		vmaUnmapMemory(Allocator, OutBufferAllocation);
+#else
 		InBufferPtr = static_cast<int32_t*>(Device.mapMemory(InBufferMemory, 0, BufferSize));
 		for (uint32_t I = 0; I < NumElements; ++I)
 		{
@@ -197,6 +272,29 @@ int main()
 		std::cout << std::endl;
 		Device.unmapMemory(OutBufferMemory);
 
+#endif
+
+#ifdef WITH_VMA
+		VmaStats Stats;
+
+		char* StatsString = nullptr;
+		vmaBuildStatsString(Allocator, &StatsString, true);
+		{
+			std::ofstream OutStats{ "VmaStats.json" };
+			OutStats << StatsString;
+		}
+		vmaFreeStatsString(Allocator, StatsString);
+
+		vmaDestroyBuffer(Allocator, InBuffer, InBufferAllocation);
+		vmaDestroyBuffer(Allocator, OutBuffer, OutBufferAllocation);
+		vmaDestroyAllocator(Allocator);
+#else
+		Device.freeMemory(InBufferMemory);
+		Device.freeMemory(OutBufferMemory);
+		Device.destroyBuffer(InBuffer);
+		Device.destroyBuffer(OutBuffer);
+#endif
+
 		Device.resetCommandPool(CommandPool, vk::CommandPoolResetFlags());
 		Device.destroyFence(Fence);
 		Device.destroyDescriptorSetLayout(DescriptorSetLayout);
@@ -206,10 +304,6 @@ int main()
 		Device.destroyPipeline(ComputePipeline);
 		Device.destroyDescriptorPool(DescriptorPool);
 		Device.destroyCommandPool(CommandPool);
-		Device.freeMemory(InBufferMemory);
-		Device.freeMemory(OutBufferMemory);
-		Device.destroyBuffer(InBuffer);
-		Device.destroyBuffer(OutBuffer);
 		Device.destroy();
 		Instance.destroy();
 	}
