@@ -255,6 +255,65 @@ int main()
 		}
 		std::cout << std::endl;
 		vmaUnmapMemory(Allocator, OutBufferAllocation);
+
+		struct BufferInfo
+		{
+			VkBuffer Buffer;
+			VmaAllocation Allocation;
+		};
+
+		// Lets allocate a couple of buffers to see how they are layed out in memory
+		auto AllocateBuffer = [Allocator, ComputeQueueFamilyIndex](size_t SizeInBytes, VmaMemoryUsage Usage)
+		{
+			vk::BufferCreateInfo BufferCreateInfo{
+				vk::BufferCreateFlags(),					// Flags
+				SizeInBytes,								// Size
+				vk::BufferUsageFlagBits::eStorageBuffer,	// Usage
+				vk::SharingMode::eExclusive,				// Sharing mode
+				1,											// Number of queue family indices
+				&ComputeQueueFamilyIndex					// List of queue family indices
+			};
+
+			VmaAllocationCreateInfo AllocationInfo = {};
+			AllocationInfo.usage = Usage;
+
+			BufferInfo Info;
+			vmaCreateBuffer(Allocator,
+							&static_cast<VkBufferCreateInfo>(BufferCreateInfo),
+							&AllocationInfo,
+							&Info.Buffer,
+							&Info.Allocation,
+							nullptr);
+
+			return Info;
+		};
+
+		auto DestroyBuffer = [Allocator](BufferInfo Info)
+		{
+			vmaDestroyBuffer(Allocator, Info.Buffer, Info.Allocation);
+		};
+
+		constexpr size_t MB = 1024 * 1024;
+		BufferInfo B1 = AllocateBuffer(4 * MB, VMA_MEMORY_USAGE_CPU_TO_GPU);
+		BufferInfo B2 = AllocateBuffer(10 * MB, VMA_MEMORY_USAGE_GPU_TO_CPU);
+		BufferInfo B3 = AllocateBuffer(20 * MB, VMA_MEMORY_USAGE_GPU_ONLY);
+		BufferInfo B4 = AllocateBuffer(100 * MB, VMA_MEMORY_USAGE_CPU_ONLY);
+
+		{
+			VmaStats Stats;
+			char* StatsString = nullptr;
+			vmaBuildStatsString(Allocator, &StatsString, true);
+			{
+				std::ofstream OutStats{ "VmaStats_2.json" };
+				OutStats << StatsString;
+			}
+			vmaFreeStatsString(Allocator, StatsString);
+		}
+
+		DestroyBuffer(B1);
+		DestroyBuffer(B2);
+		DestroyBuffer(B3);
+		DestroyBuffer(B4);
 #else
 		InBufferPtr = static_cast<int32_t*>(Device.mapMemory(InBufferMemory, 0, BufferSize));
 		for (uint32_t I = 0; I < NumElements; ++I)
@@ -275,8 +334,6 @@ int main()
 #endif
 
 #ifdef WITH_VMA
-		VmaStats Stats;
-
 		char* StatsString = nullptr;
 		vmaBuildStatsString(Allocator, &StatsString, true);
 		{
