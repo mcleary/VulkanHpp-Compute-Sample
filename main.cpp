@@ -68,6 +68,7 @@ int main()
 			1,											// Number of queue family indices
 			&ComputeQueueFamilyIndex					// List of queue family indices
 		};
+		auto vkBufferCreateInfo = static_cast<VkBufferCreateInfo>(BufferCreateInfo);
 
 #ifdef WITH_VMA
 		VmaAllocatorCreateInfo AllocatorInfo = {};
@@ -87,7 +88,7 @@ int main()
 
 		VmaAllocation InBufferAllocation;
 		vmaCreateBuffer(Allocator,
-						&static_cast<VkBufferCreateInfo>(BufferCreateInfo),
+						&vkBufferCreateInfo,
 						&AllocationInfo,
 						&InBufferRaw,
 						&InBufferAllocation,
@@ -96,7 +97,7 @@ int main()
 		AllocationInfo.usage = VMA_MEMORY_USAGE_GPU_TO_CPU;
 		VmaAllocation OutBufferAllocation;
 		vmaCreateBuffer(Allocator,
-						&static_cast<VkBufferCreateInfo>(BufferCreateInfo),
+						&vkBufferCreateInfo,
 						&AllocationInfo,
 						&OutBufferRaw,
 						&OutBufferAllocation,
@@ -187,7 +188,7 @@ int main()
 		vk::ComputePipelineCreateInfo ComputePipelineCreateInfo(vk::PipelineCreateFlags(),	// Flags
 																PipelineShaderCreateInfo,	// Shader Create Info struct
 																PipelineLayout);			// Pipeline Layout
-		vk::Pipeline ComputePipeline = Device.createComputePipeline(PipelineCache, ComputePipelineCreateInfo);
+		vk::Pipeline ComputePipeline = Device.createComputePipeline(PipelineCache, ComputePipelineCreateInfo).value;
 
 		vk::DescriptorPoolSize DescriptorPoolSize(vk::DescriptorType::eStorageBuffer, 2);
 		vk::DescriptorPoolCreateInfo DescriptorPoolCreateInfo(vk::DescriptorPoolCreateFlags(), 1, DescriptorPoolSize);
@@ -234,7 +235,7 @@ int main()
 								  1,			// Num Command Buffers
 								  &CmdBuffer);  // List of command buffers
 		Queue.submit({ SubmitInfo }, Fence);
-		Device.waitForFences({ Fence },			// List of fences
+		auto result = Device.waitForFences({ Fence },			// List of fences
 							 true,				// Wait All
 							 uint64_t(-1));		// Timeout
 
@@ -274,12 +275,14 @@ int main()
 				&ComputeQueueFamilyIndex					// List of queue family indices
 			};
 
+			auto vkBufferCreateInfo = static_cast<VkBufferCreateInfo>(BufferCreateInfo);
+
 			VmaAllocationCreateInfo AllocationInfo = {};
 			AllocationInfo.usage = Usage;
 
 			BufferInfo Info;
 			vmaCreateBuffer(Allocator,
-							&static_cast<VkBufferCreateInfo>(BufferCreateInfo),
+							&vkBufferCreateInfo,
 							&AllocationInfo,
 							&Info.Buffer,
 							&Info.Allocation,
